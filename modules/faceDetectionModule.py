@@ -3,7 +3,7 @@ import mediapipe as mp
 import time
 
 # --- Configuration --- 
-videoPath = "./testAssets/3192305-uhd_3840_2160_25fps.mp4" 
+videoPath = "./testAssets/855564-hd_1920_1080_24fps.mp4" 
 
 # --- Video capture ---
 capture = cv2.VideoCapture(videoPath)
@@ -25,7 +25,7 @@ print(f"Original Video FPS: {orig_fps:.2f}, Wait time per frame: {wait_time} ms"
 # --- mediapipe face detection setup ---
 mpFaceDetection = mp.solutions.face_detection
 mpDraw = mp.solutions.drawing_utils
-min_detection_confidence = 0.5
+min_detection_confidence = 0.75
 faceDetection = mpFaceDetection.FaceDetection(
     min_detection_confidence = min_detection_confidence
 )
@@ -49,19 +49,29 @@ while True:
     if results.detections:
         for id, detection in enumerate(results.detections):
             # basic bounding box and keypoints
-            mpDraw.draw_detection(img, detection)
+            # --- mpDraw.draw_detection(img, detection)
             score = detection.score
             print(f"Probability this is face: {score}")
 
-    # --- calculate and display processing fps
-    currTime = time.time()
-    if prevTime > 0:
-        fps = 1 / (currTime - prevTime)
+            bboxC = detection.location_data.relative_bounding_box
+            h, w, c = img.shape
+            bbox = int(bboxC.xmin * w), int(bboxC.ymin * h),\
+                   int(bboxC.width * w), int(bboxC.height * h)
+
+            cv2.rectangle(img, bbox, (255,0,255), 2)
+
+        # --- calculate and display processing fps
+        currTime = time.time()
+        if prevTime > 0:
+            fps = 1 / (currTime - prevTime)
+            
+            cv2.putText(img, f"FPS: {int(fps)}", (20, 70), 
+                        cv2.FONT_HERSHEY_PLAIN, 3, (0,255,0), 2)
+            cv2.putText(img, f"confidence: {round(score[0], 2)*100}%", 
+                        (bbox[0], bbox[1]-20), cv2.FONT_HERSHEY_PLAIN, 
+                        3, (0,255,0), 2)
         
-        cv2.putText(img, f"FPS: {int(fps)}", (20, 70), 
-                    cv2.FONT_HERSHEY_PLAIN, 3, (0,255,0), 2)
-    
-    prevTime = currTime
+        prevTime = currTime
 
     # --- display image ---
     cv2.imshow("Face Detection", img)
