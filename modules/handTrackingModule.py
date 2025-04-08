@@ -4,6 +4,7 @@ os.environ['TF_ENABLE_ONEDNN_OPTS']='0'
 import cv2
 import mediapipe as mp
 import time
+import math
 
 class HandDetector():
     def __init__(
@@ -28,6 +29,7 @@ class HandDetector():
             self.detectionCon, self.trackCon
         )
         self.mpDraw = mp.solutions.drawing_utils
+        self.tipIds = [4, 8, 12, 16, 20]
 
         self.results = None # store results 
 
@@ -45,22 +47,82 @@ class HandDetector():
     
     def findPosition(self, img, handNo=0, draw=True):
         """Finds landmark positions for a specific hand"""
-        landmarkList = []
+        xList, yList, bbox = [], [], []
+        self.landmarkList = []
         if self.results and self.results.multi_hand_landmarks: # ensuring res exists
             if handNo < len(self.results.multi_hand_landmarks):
                 myHand = self.results.multi_hand_landmarks[handNo]
                 for id, lm in enumerate(myHand.landmark):
                     h, w, c, = img.shape 
                     cx, cy = int(lm.x * w), int(lm.y * h)
-                    landmarkList.append([id, cx, cy])
+                    xList.append(cx)
+                    yList.append(cy)
+                    self.landmarkList.append([id, cx, cy])
                     if draw:
                         # Example: Draw circles on all landmarks 
-                        # cv2.circle(img, (cx, cy), 5, (255, 0, 0), cv2.FILLED)
+                        cv2.circle(img, (cx, cy), 5, (255, 0, 255), cv2.FILLED)
                         # Example: Highlight a specific landmark (e.g., wrist)
-                        if id == 0:
-                            cv2.circle(img, (cx, cy), 15, (255,0,255), cv2.FILLED)
+                        #if id == 0:
+                        #    cv2.circle(img, (cx, cy), 15, (255,0,255), cv2.FILLED)
+                xmin, xmax = min(xList), max(xList)
+                ymin, ymax = min(yList), max(yList)
+                bbox = xmin, ymin, xmax, ymax 
+
+                if draw:
+                    cv2.rectangle(img, (xmin-20, ymin-20), (xmax+20, ymax+20),
+                                  (0,255,0), 2)
         
-        return landmarkList
+        return self.landmarkList, bbox
+
+    def fingersUp(self):
+        fingers = []
+        
+        # --- checks --- 
+        if not self.landmarkList: # check if list empty
+            print("Warning: landmarkList is empty in fingersUp")
+            return fingers 
+
+        # check if necessary landmarks exist 
+        max_needed_index = max(self.tipIds[4], self.tipIds[4] - 2)
+        if len(self.landmarkList) <= max_needed_index:
+            print(f"Warning: landmark list too short ({len(self.landmarkList)})in fingersUp")
+            return fingers 
+
+        # Thumb (right handed) (left would be <)
+        if self.landmarkList[self.tipIds[0]][1] > self.landmarkList[self.tipIds[0] - 1][1]:
+            fingers.append(1)
+        else:
+            fingers.append(0)
+
+        # Fingers 
+        for id in range(1,5):
+            if self.landmarkList[self.tipIds[id]][2] < self.landmarkList[self.tipIds[id] - 2][2]:
+                fingers.append(1)
+            else:
+                fingers.append(0)
+
+        return fingers
+
+    def findDistance(self, p1, p2, img, draw=True, r=15, t=3):
+        # --- checks --- 
+        if not self.landmarkList or p1 >= len(self.landmarkList) or \
+            p2 >= len(self.landmarkList):
+                print(f"Warning: Invalid landmarks ({p1}, {p2}) or list for findDistance.")
+                return 0, img, [0,0,0,0,0,0]
+
+        x1, y1 = self.landmarkList[p1][1:]
+        x2, y2 = self.landmarkList[p2][1:]
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2 
+        
+        if draw:
+            cv2.line(img, (x1, y1), (x2, y2), (255,0,255), t)
+            cv2.circle(img, (x1, y1), r, (255,0,255), cv2.FILLED)
+            cv2.circle(img, (x2, y2), r, (255,0,255), cv2.FILLED)
+            cv2.circle(img, (cx, cy), r, (0,0,255), cv2.FILLED)
+        length = math.hypot(x2 - x1, y2 - y1)
+
+        return length, img, [x1,y1,x2,y2,cx,cy]
+
 
 # --- main loop using handDetector class ---
 def main ():
@@ -95,7 +157,7 @@ def main ():
      
         # use the detector 
         img = detector.findHands(img, draw=True)
-        landmarkList = detector.findPosition(img, draw=True)
+        landmarkList, bbox = detector.findPosition(img, draw=True)
 
         if len(landmarkList) != 0:
             # example: print position of the wrist (landmark 0)
