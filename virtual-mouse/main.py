@@ -13,12 +13,12 @@ if project_root not in sys.path:
 # --- Path setup done ---
 
 # --- Module Import ---
-from modules.handTrackingModule import HandDetector 
+from modules.handTrackingModule import HandDetector
+from modules.oneEuroFilter import OneEuroFilter 
 
 # --- Constants ---
 CAM_WIDTH, CAM_HEIGHT = 640, 480
 FRAME_REDUCTION = 100 # for mapping area
-SMOOTHENER = 7 # smoothening mouse movement
 CLICK_DISTANCE_THRESHOLD = 30 # Made constant, adjust as needed
 INDEX_TIP_ID = 8
 MIDDLE_TIP_ID = 12
@@ -39,6 +39,22 @@ capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
 # --- Hand Detector ---
 detector = HandDetector(maxHands=1) 
 
+# --- One Euro Filter setup --- 
+initial_time = time.time()
+# filter params (tune later)
+filter_min_cutoff = 0.1
+filter_beta = 0.005
+filter_d_cutoff = 1.0
+
+one_euro_filter_x = OneEuroFilter(
+    initial_time, screen_width / 2, min_cutoff=filter_min_cutoff,
+    beta = filter_beta, d_cutoff = filter_d_cutoff
+)
+one_euro_filter_y = OneEuroFilter(
+    initial_time, screen_height / 2, min_cutoff=filter_min_cutoff,
+    beta = filter_beta, d_cutoff = filter_d_cutoff
+)
+
 # --- Timing ---
 prev_time = 0
 
@@ -49,6 +65,8 @@ while True:
     if not success:
         print("Error: Failed to grab frame.")
         break
+    
+    currTime = time.time()
 
     # --- Optional: Flip image for mirror view ---
     img = cv2.flip(img, 1)
@@ -76,20 +94,17 @@ while True:
             # 5. Index Finger Up: Moving Mode
             if fingers[1] == 1 and fingers[2] == 0:
                 # Convert coordinates to screen space within the reduced frame
-                x3 = np.interp(x1, (FRAME_REDUCTION, CAM_WIDTH - FRAME_REDUCTION), (0, screen_width))
-                y3 = np.interp(y1, (FRAME_REDUCTION, CAM_HEIGHT - FRAME_REDUCTION), (0, screen_height))
+                x_mapped = np.interp(x1, (FRAME_REDUCTION, CAM_WIDTH - FRAME_REDUCTION), (0, screen_width))
+                y_mapped = np.interp(y1, (FRAME_REDUCTION, CAM_HEIGHT - FRAME_REDUCTION), (0, screen_height))
 
                 # Smoothen the values
-                curr_loc_x = prev_loc_x + (x3 - prev_loc_x) / SMOOTHENER
-                curr_loc_y = prev_loc_y + (y3 - prev_loc_y) / SMOOTHENER
+                smooth_x = one_euro_filter_x(currTime, x_mapped)
+                smooth_y = one_euro_filter_y(currTime, y_mapped)
 
                 # Move Mouse
-                autopy.mouse.move(curr_loc_x, curr_loc_y) 
+                autopy.mouse.move(smooth_x, smooth_y) 
                 # Feedback circle
                 cv2.circle(img, (x1, y1), 15, (255, 0, 255), cv2.FILLED)
-
-                # Update previous location for next frame's smoothing
-                prev_loc_x, prev_loc_y = curr_loc_x, curr_loc_y
 
             # 6. Both Index and Middle Fingers Up: Clicking Mode
             if fingers[1] == 1 and fingers[2] == 1:
