@@ -1,4 +1,3 @@
-# This is the main python file for the virtual mouse project.
 import os 
 import sys
 import cv2 
@@ -6,100 +5,123 @@ import time
 import autopy
 import numpy as np
 
-# --- Add project root to Python path ---
-# Get the directory containing this script (virtual-mouse)
+# --- Add project root to Python path --- 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# Get the parent directory (your_project_folder)
 project_root = os.path.dirname(current_dir)
-# Add the project root to the start of the Python path
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+# --- Path setup done ---
 
+# --- Module Import ---
 from modules.handTrackingModule import HandDetector 
 
+# --- Constants ---
+CAM_WIDTH, CAM_HEIGHT = 640, 480
+FRAME_REDUCTION = 100 # for mapping area
+SMOOTHENER = 7 # smoothening mouse movement
+CLICK_DISTANCE_THRESHOLD = 30 # Made constant, adjust as needed
+INDEX_TIP_ID = 8
+MIDDLE_TIP_ID = 12
 
-camWidth, camHeight = 640, 480
-frameReduction = 100 
-screenWidth, screenHeight = autopy.screen.size()
-smoothener = 5
-prevLocX, prevLocY = 0, 0
-currLocX, currLocY = 0, 0
+# --- Screen and Camera Setup ---
+screen_width, screen_height = autopy.screen.size()
+prev_loc_x, prev_loc_y = 0, 0
+curr_loc_x, curr_loc_y = 0, 0
 
 capture = cv2.VideoCapture(0)
-capture.set(3,camWidth), capture.set(4, camHeight)
-prevTime = 0
+if not capture.isOpened(): 
+    print("Error: Could not open camera.")
+    exit()
 
-detector = HandDetector(maxHands = 1)
+capture.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
+capture.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
 
+# --- Hand Detector ---
+detector = HandDetector(maxHands=1) 
+
+# --- Timing ---
+prev_time = 0
+
+# --- Main Loop ---
 while True:
-    # Find hand landmarks
+    # 1. Read frame
     success, img = capture.read()
-    img = detector.findHands(img)
-    landmarkList, bbox = detector.findPosition(img)
-    
-    # Get the tip of the index and middle fingers
-    if len(landmarkList) != 0:
-        x1, y1 = landmarkList[8][1:] # index
-        x2, y2 = landmarkList[12][1:] # middle
-        
-        # print(x1,y1,x2,y2)
+    if not success:
+        print("Error: Failed to grab frame.")
+        break
 
-        # Check which fingers are up
-        fingers = detector.fingersUp()
-        #print(fingers)
+    # --- Optional: Flip image for mirror view ---
+    img = cv2.flip(img, 1)
 
-        cv2.rectangle(img, (frameReduction, frameReduction), 
-                          (camWidth - frameReduction, camHeight - frameReduction),
-                          (255,0,255), 2)
+    # 2. Find hand landmarks
+    img = detector.findHands(img, draw=False) # drawing 
+    landmarkList, bbox = detector.findPosition(img, draw=False) # drawing true
 
-        # Index Finger -> Moving mode 
-        if fingers[1] == 1 and fingers[2] == 0:
-            # Convert coordinates 
-            x3 = np.interp(x1, (frameReduction,camWidth-frameReduction), 
-                           (0,screenWidth))
-            y3 = np.interp(y1, (frameReduction,camHeight-frameReduction), 
-                           (0,screenHeight))
+    # Draw the active area boundary
+    cv2.rectangle(img, (FRAME_REDUCTION, FRAME_REDUCTION), 
+                      (CAM_WIDTH - FRAME_REDUCTION, CAM_HEIGHT - FRAME_REDUCTION),
+                      (255, 0, 255), 2)
 
-            # Smoothen the values
-            currLocX = prevLocX + (x3 - prevLocX) / smoothener
-            currLocY = prevLocY + (y3 - prevLocY) / smoothener
+    # 3. Get the tip of the index and middle fingers if hand is detected
+    if landmarkList: 
+        # Ensure we have enough landmarks before accessing tips
+        if len(landmarkList) > max(INDEX_TIP_ID, MIDDLE_TIP_ID):
+            x1, y1 = landmarkList[INDEX_TIP_ID][1:]   # Index finger tip coordinates
+            x2, y2 = landmarkList[MIDDLE_TIP_ID][1:] # Middle finger tip coordinates
 
-            # Moving the mouse
-            autopy.mouse.move(screenWidth - currLocX, currLocY)
-            cv2.circle(img, (x1,y1), 15, (255,0,255), cv2.FILLED)
-            prevLocX, prevLocY = currLocX, currLocY
+            # 4. Check which fingers are up
+            fingers = detector.fingersUp()
+            # print(fingers) # Debug print
 
-        # Both index and middle fingers are up -> clicking mode 
-        if fingers[1] == 1 and fingers[2] == 1:
-            # Find distance between fingers 
-            length, img, lineInfo = detector.findDistance(8, 12, img)
-            # distance threshold for clicking = 30
-            if length < 30: 
-                cv2.circle(img, (lineInfo[4],lineInfo[5]), 15, (0,255,0), cv2.FILLED)
-                autopy.mouse.click()
-    
-    # --- fps calculation --- 
-    currTime = time.time()
-    if prevTime > 0: # ensures prevTime has been set in a prev iteration
-        fps = 1/(currTime - prevTime)
-        cv2.putText(
-            img, f"FPS: {int(fps)}", (10,70), 
-            cv2.FONT_HERSHEY_PLAIN, 3, 
-            (255,0,255), 3
-        )
-    prevTime = currTime
+            # 5. Index Finger Up: Moving Mode
+            if fingers[1] == 1 and fingers[2] == 0:
+                # Convert coordinates to screen space within the reduced frame
+                x3 = np.interp(x1, (FRAME_REDUCTION, CAM_WIDTH - FRAME_REDUCTION), (0, screen_width))
+                y3 = np.interp(y1, (FRAME_REDUCTION, CAM_HEIGHT - FRAME_REDUCTION), (0, screen_height))
 
-    # --- Display the frame --- 
-    if img is not None: # Additional check 
-        cv2.imshow("Virtual Mouse", img)
-    else:
-        print(f"Warning: Frame is None even though success was true")
-        continue # skip processing this frame
+                # Smoothen the values
+                curr_loc_x = prev_loc_x + (x3 - prev_loc_x) / SMOOTHENER
+                curr_loc_y = prev_loc_y + (y3 - prev_loc_y) / SMOOTHENER
 
+                # Move Mouse
+                autopy.mouse.move(curr_loc_x, curr_loc_y) 
+                # Feedback circle
+                cv2.circle(img, (x1, y1), 15, (255, 0, 255), cv2.FILLED)
 
-    # --- wait for key press --- 
-    key = cv2.waitKey(1) & 0xFF # 0xFF for cross platform compatibility
+                # Update previous location for next frame's smoothing
+                prev_loc_x, prev_loc_y = curr_loc_x, curr_loc_y
+
+            # 6. Both Index and Middle Fingers Up: Clicking Mode
+            if fingers[1] == 1 and fingers[2] == 1:
+                # Find distance between index and middle finger tips
+                length, img, lineInfo = detector.findDistance(INDEX_TIP_ID, MIDDLE_TIP_ID, img)
+                
+                # Click mouse if distance is short enough
+                if length < CLICK_DISTANCE_THRESHOLD: 
+                    cv2.circle(img, (lineInfo[4], lineInfo[5]), 15, (0, 255, 0), cv2.FILLED) # Green click feedback
+                    autopy.mouse.click()
+                    # Add a small delay after click to prevent rapid multi-clicks
+                    time.sleep(0.1) 
+
+    # 7. Frame Rate Calculation
+    curr_time = time.time()
+    if prev_time > 0:
+        fps = 1 / (curr_time - prev_time)
+        cv2.putText(img, f"FPS: {int(fps)}", (20, 50), 
+                    cv2.FONT_HERSHEY_PLAIN, 3, (255, 0, 0), 3)
+    prev_time = curr_time
+
+    # 8. Display Image
+    cv2.imshow("Virtual Mouse", img)
+
+    # 9. Exit Condition
+    key = cv2.waitKey(1) & 0xFF 
     if key == ord('q'):
-        print("exiting")
+        print("Exiting...")
         break 
 
+# --- Cleanup ---
+print("Releasing camera and destroying windows...")
+capture.release()
+cv2.destroyAllWindows()
+print("Done.")
